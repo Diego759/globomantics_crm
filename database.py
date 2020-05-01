@@ -48,7 +48,8 @@ class Database:
             bal = float(acct["due"]) - float(acct["paid"])
 
             # Style added in module 4
-            return f"$ {bal:.2f} US Dollars"
+            return f" {bal:.2f} USD"
+            # return f"US$ {bal:.2f}"
 
             # Style added in module 3
             # return f"$ {bal:.2f}"
