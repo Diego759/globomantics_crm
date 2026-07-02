@@ -1,0 +1,4 @@
+brainflow>=5.22.0
+numpy>=1.24
+PySide6>=6.6
+pyqtgraph>=0.13
