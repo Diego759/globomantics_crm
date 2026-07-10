@@ -21,7 +21,16 @@ don't fully support. BrainFlow ≥ 5.22.0 added a dedicated
 `MUSE_S_ATHENA_BOARD` that speaks it over **native Bluetooth (no BLED112
 dongle)** and ships `DataFilter.get_avg_band_powers()` for the band-power math.
 
-## Install
+## Windows: just double-click
+
+Double-click **`Launch Local Mind Monitor.bat`** inside `local_mind_monitor\`
+(copy it to your Desktop for easy access). The first double-click installs
+everything into a private `.venv` folder and takes about a minute — every
+double-click after that opens the app straight away, no terminal involved.
+Requires Python 3.11+ from [python.org](https://python.org/downloads/) (check
+"Add python.exe to PATH" during install) if you don't already have it.
+
+## Install (manual / macOS / Linux)
 
 ```bash
 pip install -r local_mind_monitor/requirements.txt
