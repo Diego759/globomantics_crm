@@ -39,7 +39,7 @@ def _setup_logging() -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Private, local Mind Monitor for Muse S Athena")
+    parser = argparse.ArgumentParser(description="Private, local EEG visualizer for the Muse S Athena")
     parser.add_argument(
         "--synthetic",
         action="store_true",

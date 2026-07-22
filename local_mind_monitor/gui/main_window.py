@@ -58,7 +58,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._preset = preset
         self.device: MuseDevice | None = None
 
-        self.setWindowTitle("Local Mind Monitor" + (" (synthetic)" if synthetic else ""))
+        self.setWindowTitle("EEG Visualizer for Muse" + (" (synthetic)" if synthetic else ""))
         self.resize(1040, 800)
         self.setStyleSheet(STYLESHEET)
 

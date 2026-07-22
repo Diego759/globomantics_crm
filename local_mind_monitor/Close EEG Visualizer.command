@@ -1,9 +1,9 @@
 #!/bin/bash
-# macOS rescue: force-closes any running Local Mind Monitor. You normally never
+# macOS rescue: force-closes any running EEG Visualizer. You normally never
 # need this -- the app surfaces its existing window instead of stacking copies
 # and shuts down cleanly. Keep it for the rare case a launch seems stuck.
 
-echo "Closing any running Local Mind Monitor..."
+echo "Closing any running EEG Visualizer..."
 if pkill -f "local_mind_monitor.app"; then
     echo "Closed."
 else

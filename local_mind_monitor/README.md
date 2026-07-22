@@ -1,10 +1,10 @@
-# Local Mind Monitor
+# EEG Visualizer for Muse
 
-A private, fully-local desktop replacement for [Mind Monitor](https://mind-monitor.com),
-built for the **Muse S Athena**. Connects over native Bluetooth via
+A private, fully-local desktop app that visualizes and records EEG from the
+**Muse S Athena** headband. Connects over native Bluetooth via
 [BrainFlow](https://brainflow.org), shows live EEG and per-channel band powers,
-and records Mind Monitor-style CSV sessions with markers. Nothing leaves your
-machine — no accounts, no cloud. Runs on **Windows and macOS**.
+and records CSV sessions with markers. Nothing leaves your machine — no
+accounts, no cloud. Runs on **Windows and macOS**.
 
 ## Get the code
 
@@ -19,11 +19,11 @@ where the launchers below live.
 
 - **Live band-power readout** — a colour-coded row of cards (δ Delta / θ Theta /
   α Alpha / β Beta / γ Gamma) showing each band's current absolute power in dB.
-- **Scrolling charts** — raw EEG per electrode (TP9, AF7, AF8, TP10) and a
-  Mind Monitor-style scrolling band-power (dB) graph with the Greek symbol
-  riding the end of each line.
-- **Signal quality** — per-electrode good/ok/bad indicators (Mind Monitor's HSI analog).
-- **CSV recording + markers** — ~1 Hz rows in a Mind Monitor-compatible column
+- **Scrolling charts** — raw EEG per electrode (TP9, AF7, AF8, TP10) plus a
+  scrolling band-power (dB) graph with each band's Greek symbol riding the end
+  of its line.
+- **Signal quality** — per-electrode good/ok/bad contact indicators.
+- **CSV recording + markers** — ~1 Hz rows in a spreadsheet-friendly column
   layout, with a marker button that annotates the session.
 - **Robust connection** — detects a stalled Bluetooth stream, auto-reconnects,
   and tells you in the status bar instead of freezing silently. All activity is
@@ -31,32 +31,31 @@ where the launchers below live.
 
 ## Windows: just double-click
 
-Double-click **`Launch Local Mind Monitor.bat`** inside `local_mind_monitor\`.
-The first double-click installs everything into a private `.venv` folder and
-takes about a minute — every double-click after that opens the app straight
-away. Requires Python 3.11+ from [python.org](https://python.org/downloads/)
-(check "Add python.exe to PATH" during install) if you don't already have it.
+Double-click **`Launch EEG Visualizer.bat`** inside `local_mind_monitor\`. The
+first double-click installs everything into a private `.venv` folder and takes
+about a minute — every double-click after that opens the app straight away.
+Requires Python 3.11+ from [python.org](https://python.org/downloads/) (check
+"Add python.exe to PATH" during install) if you don't already have it.
 
 ## macOS: just double-click
 
-Double-click **`Launch Local Mind Monitor.command`** inside `local_mind_monitor/`.
+Double-click **`Launch EEG Visualizer.command`** inside `local_mind_monitor/`.
 Same idea: the first run builds a private `.venv` and installs dependencies,
 later runs launch instantly. Requires Python 3.11+ from
 [python.org](https://python.org/downloads/) (or `brew install python`).
 
 The first time, macOS Gatekeeper may block a downloaded `.command`. If
 double-click does nothing, **right-click → Open** once (or run
-`chmod +x "Launch Local Mind Monitor.command"` in Terminal). macOS will also ask
-for **Bluetooth permission** the first time the app scans for the headband —
-allow it.
+`chmod +x "Launch EEG Visualizer.command"` in Terminal). macOS will also ask for
+**Bluetooth permission** the first time the app scans for the headband — allow it.
 
 ## Try it without a headband
 
 To confirm it installs and runs before your Muse is on hand, use the test-mode
-launcher — **`Launch Local Mind Monitor (Test Mode).bat`** (Windows) or
-**`Launch Local Mind Monitor (Test Mode).command`** (macOS). It runs on a
-synthetic signal (the window title shows "(synthetic)") and shares the same
-`.venv`, so it's instant once either launcher has been run once.
+launcher — **`Launch EEG Visualizer (Test Mode).bat`** (Windows) or
+**`Launch EEG Visualizer (Test Mode).command`** (macOS). It runs on a synthetic
+signal (the window title shows "(synthetic)") and shares the same `.venv`, so
+it's instant once either launcher has been run once.
 
 ## Can't connect to the Muse?
 
@@ -71,7 +70,7 @@ see the headband at all, and prints its address.
 - **Muse not listed** → it's off, asleep, too far, still connected to your
   phone, or this computer's adapter doesn't support Bluetooth Low Energy.
 
-If a launch ever seems stuck, **`Close Local Mind Monitor`** (`.bat` / `.command`)
+If a launch ever seems stuck, **`Close EEG Visualizer`** (`.bat` / `.command`)
 force-closes any running instance.
 
 ## Install / run manually (any OS)
@@ -112,7 +111,7 @@ are the next things to try.
 |---|---|
 | `device.py` | BrainFlow session + background acquisition, ring buffers, stall detection / reconnect, 1 Hz recording |
 | `processing.py` | Band powers (relative + absolute dB) and signal quality (no GUI dependency) |
-| `recorder.py` | Mind Monitor-style CSV writer + markers |
+| `recorder.py` | CSV session writer + markers |
 | `single_instance.py` | Single-instance guard (a second launch surfaces the open window) |
 | `bluetooth_check.py` | Standalone BLE scanner diagnostic |
 | `gui/main_window.py` | Controls, signal-quality row, band readout, wiring |

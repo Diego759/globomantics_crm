@@ -1,9 +1,11 @@
 @echo off
 setlocal
 
-rem Double-click launcher. First run creates a local virtual environment and
-rem installs dependencies (shows progress in this window); every run after
-rem that skips straight to launching the app.
+rem Test-mode launcher. Opens the app running on BrainFlow's synthetic signal
+rem generator instead of a real headband -- use it to confirm everything
+rem installs and runs before your Muse is on hand. Shares the same .venv as
+rem the normal launcher, so if you have already run that one, this starts
+rem instantly too. The app window title will read "(synthetic)".
 
 set "SCRIPT_DIR=%~dp0"
 set "VENV_DIR=%SCRIPT_DIR%.venv"
@@ -38,7 +40,7 @@ if exist "%VENV_DIR%\Scripts" if not exist "%VENV_DIR%\pyvenv.cfg" (
 )
 
 if not exist "%READY_MARKER%" (
-    echo Setting up Local Mind Monitor for the first time...
+    echo Setting up EEG Visualizer for the first time...
     echo This installs its dependencies into a private folder here ^(.venv^)
     echo and only happens once. It can take a minute.
     echo.
@@ -74,13 +76,13 @@ if not exist "%READY_MARKER%" (
     rem setup is retried next time instead of launching a broken app.
     > "%READY_MARKER%" echo installed
     echo.
-    echo Setup complete. Launching...
+    echo Setup complete. Launching in test mode...
 )
 
 rem local_mind_monitor is invoked as a module, so it needs to be run from
 rem the folder that CONTAINS local_mind_monitor\ (one level up from here).
 pushd "%SCRIPT_DIR%.."
-start "" "%VENV_DIR%\Scripts\pythonw.exe" -m local_mind_monitor.app %*
+start "" "%VENV_DIR%\Scripts\pythonw.exe" -m local_mind_monitor.app --synthetic %*
 popd
 
 exit /b 0

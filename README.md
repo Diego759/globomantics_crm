@@ -1,11 +1,10 @@
-# EEG Visualizer for Muse — Local Mind Monitor
+# EEG Visualizer for Muse
 
 A private, fully-local desktop app that visualizes and records EEG from the
-**Muse S Athena** headband — a self-hosted replacement for
-[Mind Monitor](https://mind-monitor.com). Live raw EEG, per-band power
-(δ Delta / θ Theta / α Alpha / β Beta / γ Gamma) in dB, signal quality, and
-Mind Monitor-style CSV recording with markers. Everything stays on your machine
-— no accounts, no cloud. Runs on **Windows and macOS**.
+**Muse S Athena** headband. Live raw EEG, per-band power
+(δ Delta / θ Theta / α Alpha / β Beta / γ Gamma) in dB, signal quality, and CSV
+recording with markers. Everything stays on your machine — no accounts, no
+cloud. Runs on **Windows and macOS**.
 
 The app lives in **[`local_mind_monitor/`](local_mind_monitor/)** — see its
 [detailed README](local_mind_monitor/README.md) for everything below in depth.
@@ -15,9 +14,9 @@ The app lives in **[`local_mind_monitor/`](local_mind_monitor/)** — see its
 - **Live band-power readout** — colour-coded δ/θ/α/β/γ cards showing each band's
   current absolute power in dB.
 - **Scrolling charts** — raw EEG per electrode (TP9, AF7, AF8, TP10) plus a
-  Mind Monitor-style scrolling band-power (dB) graph with per-band symbols.
+  scrolling band-power (dB) graph with per-band symbols.
 - **Signal quality** — per-electrode good/ok/bad indicators.
-- **CSV recording + markers** — ~1 Hz Mind Monitor-compatible rows.
+- **CSV recording + markers** — ~1 Hz spreadsheet-friendly rows.
 - **Robust Bluetooth** — connects to the Athena over native BLE via
   [BrainFlow](https://brainflow.org), detects and auto-recovers a stalled
   stream, and logs everything locally.
@@ -29,8 +28,8 @@ git clone https://github.com/Diego759/EEG_visualizer_for_muse.git
 cd EEG_visualizer_for_muse/local_mind_monitor
 ```
 
-- **Windows** — double-click `Launch Local Mind Monitor.bat`
-- **macOS** — double-click `Launch Local Mind Monitor.command`
+- **Windows** — double-click `Launch EEG Visualizer.bat`
+- **macOS** — double-click `Launch EEG Visualizer.command`
   (first time: right-click → **Open**, and allow Bluetooth when macOS asks)
 
 No headband yet? Use the **Test Mode** launcher to run on a synthetic signal and
