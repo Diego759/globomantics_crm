@@ -6,6 +6,15 @@ built for the **Muse S Athena**. Connects over native Bluetooth via
 and records Mind Monitor-style CSV sessions with markers. Nothing leaves your
 machine — no accounts, no cloud. Runs on **Windows and macOS**.
 
+## Get the code
+
+```bash
+git clone https://github.com/Diego759/EEG_visualizer_for_muse.git
+```
+
+The app lives in the **`local_mind_monitor/`** subfolder of the repo — that's
+where the launchers below live.
+
 ## Features
 
 - **Live band-power readout** — a colour-coded row of cards (δ Delta / θ Theta /
