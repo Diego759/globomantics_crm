@@ -7,6 +7,7 @@ snapshots from here on its own timer.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 
@@ -16,6 +17,8 @@ from brainflow.board_shim import BoardIds, BoardShim, BrainFlowInputParams, Brai
 from . import processing
 from .recorder import Recorder
 
+log = logging.getLogger("local_mind_monitor.device")
+
 # Athena default preset for BrainFlow; low_latency is Athena-only.
 ATHENA_OTHER_INFO = "preset=p1041;low_latency=true"
 
@@ -23,19 +26,60 @@ ATHENA_OTHER_INFO = "preset=p1041;low_latency=true"
 BUFFER_SECONDS = 10
 RECORD_INTERVAL = 1.0  # seconds between CSV rows
 
+# Muse over native BLE can be slow to discover; give the scan a generous
+# window and retry, since it often connects only on the 2nd or 3rd attempt.
+BLE_DISCOVERY_TIMEOUT = 15  # seconds BrainFlow spends looking for the headband
+CONNECT_ATTEMPTS = 3
+CONNECT_RETRY_DELAY = 2.0  # seconds between attempts
+
+# Muse BLE streams sometimes stall mid-session (phone app steals the link,
+# interference, a brief drop) -- BrainFlow keeps the session "prepared" but
+# stops delivering samples, so the plots freeze silently. Detect that and try
+# a full reconnect, then give up and tell the user to reconnect by hand.
+STALL_TIMEOUT = 3.0        # seconds with no new EEG before we call it stalled
+RECOVERY_COOLDOWN = 5.0    # seconds between automatic reconnect attempts
+MAX_RECOVERY_ATTEMPTS = 3  # after this many failed reconnects, stop and surface it
+
+# Muse S Athena preset. BrainFlow defaults to p1041 ("5 EEG values"), but that
+# preset only delivered an initial burst then stopped streaming on this setup.
+# The reverse-engineered reference implementations (amused-py / OpenMuse) stream
+# the Athena with p1034/p1035; p1035 = 4 EEG channels, matching the Athena's four
+# electrodes (TP9/AF7/AF8/TP10). Override with --preset if needed.
+ATHENA_PRESET = "p1035"
+# low_latency sends BrainFlow's "L1" command. BrainFlow's own docs call
+# low_latency=false the "more conservative device mode" and recommend it for
+# long recordings; low_latency=true was stalling the stream a few seconds after
+# connecting on this setup, so we default to the conservative mode.
+ATHENA_LOW_LATENCY_DEFAULT = False
+
+
+class DeviceNotFoundError(RuntimeError):
+    """Raised when the headband could not be reached after retries."""
+
 
 class MuseDevice:
-    def __init__(self, synthetic: bool = False, mac_address: str | None = None):
+    def __init__(
+        self,
+        synthetic: bool = False,
+        mac_address: str | None = None,
+        low_latency: bool = ATHENA_LOW_LATENCY_DEFAULT,
+        preset: str = ATHENA_PRESET,
+    ):
         BoardShim.disable_board_logger()
         self.synthetic = synthetic
+        self._low_latency = low_latency
+        self._preset = preset
         params = BrainFlowInputParams()
         if synthetic:
             self.board_id = BoardIds.SYNTHETIC_BOARD.value
         else:
             self.board_id = BoardIds.MUSE_S_ATHENA_BOARD.value
-            params.other_info = ATHENA_OTHER_INFO
+            ll = "true" if low_latency else "false"
+            params.other_info = f"preset={preset};low_latency={ll}"
+            params.timeout = BLE_DISCOVERY_TIMEOUT
             if mac_address:
                 params.mac_address = mac_address
+        self._params = params
         self._board = BoardShim(self.board_id, params)
 
         self.sampling_rate = BoardShim.get_sampling_rate(self.board_id)
@@ -60,6 +104,21 @@ class MuseDevice:
         self._recorder: Recorder | None = None
         self._last_record = 0.0
 
+        # Stall detection / recovery state.
+        self._last_data_time = 0.0     # monotonic time new EEG last arrived
+        self._stall_logged = False
+        self._last_recover = 0.0
+        self._recover_attempts = 0
+        self._stream_lost = False      # gave up recovering; user must reconnect
+        # Serialises BrainFlow board lifecycle calls (prepare/start/stop/release
+        # and get_board_data) so the recovery thread and a Disconnect/close on
+        # another thread can't touch the native session at the same time.
+        self._board_lock = threading.Lock()
+        # Serialises BrainFlow DataFilter calls: band powers run on the GUI
+        # thread AND (while recording) on this one, and DataFilter isn't safe
+        # to call from two threads at once.
+        self._compute_lock = threading.Lock()
+
     def _preset_available(self, preset) -> bool:
         try:
             BoardShim.get_board_descr(self.board_id, preset)
@@ -69,11 +128,51 @@ class MuseDevice:
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
-        self._board.prepare_session()
+        if self.synthetic:
+            log.info("Connecting (synthetic, %d Hz, %d ch)...", self.sampling_rate, len(self.eeg_channels))
+        else:
+            log.info(
+                "Connecting (Muse S Athena, %d Hz, %d ch, preset=%s, low_latency=%s)...",
+                self.sampling_rate, len(self.eeg_channels), self._preset,
+                "true" if self._low_latency else "false",
+            )
+        self._prepare_with_retries()
         self._board.start_stream()
+        # Grace period so a slow first-sample delivery isn't flagged as a stall.
+        self._last_data_time = time.time()
         self._running = True
         self._thread = threading.Thread(target=self._loop, daemon=True)
         self._thread.start()
+        log.info("Streaming started")
+
+    def _prepare_with_retries(self) -> None:
+        """Try to open the session a few times. Muse BLE discovery is flaky
+        and frequently succeeds only on a later attempt; the synthetic board
+        connects instantly so it just runs once."""
+        attempts = 1 if self.synthetic else CONNECT_ATTEMPTS
+        last_exc: Exception | None = None
+        for attempt in range(1, attempts + 1):
+            try:
+                self._board.prepare_session()
+                return
+            except Exception as exc:  # noqa: BLE001 - surfaced below
+                last_exc = exc
+                # Release anything half-opened before the next try.
+                try:
+                    if self._board.is_prepared():
+                        self._board.release_session()
+                except Exception:
+                    pass
+                if attempt < attempts:
+                    time.sleep(CONNECT_RETRY_DELAY)
+        if self.synthetic:
+            raise last_exc  # nothing user-actionable; show the raw error
+        raise DeviceNotFoundError(
+            "Couldn't find your Muse S Athena.\n\n"
+            "Check that it's turned on, sitting close to this PC, and not "
+            "connected to your phone or the Muse app. Then try Connect again.\n\n"
+            f"(BrainFlow, {attempts} attempts: {last_exc})"
+        )
 
     def stop(self) -> None:
         self._running = False
@@ -81,25 +180,118 @@ class MuseDevice:
             self._thread.join(timeout=2.0)
         if self._recorder:
             self.stop_recording()
-        try:
-            if self._board.is_prepared():
-                self._board.stop_stream()
-                self._board.release_session()
-        except Exception:
-            pass
+        self._release_board()
+
+    def _release_board(self) -> None:
+        """Tear down the BrainFlow session without letting a hung native call
+        wedge shutdown. release_session() can block indefinitely if the BLE
+        radio is in a bad state; the window would vanish but pythonw.exe would
+        linger. Run it on a daemon thread and stop waiting after a few seconds
+        -- a daemon thread never keeps the interpreter alive -- so closing the
+        app always actually exits the process."""
+        def _release() -> None:
+            with self._board_lock:
+                try:
+                    if self._board.is_prepared():
+                        self._board.stop_stream()
+                        self._board.release_session()
+                except Exception:
+                    pass
+
+        t = threading.Thread(target=_release, daemon=True)
+        t.start()
+        t.join(timeout=3.0)
 
     def _loop(self) -> None:
         while self._running:
             try:
                 self._pull()
             except Exception:
-                pass
+                # Log (throttled) instead of swallowing silently -- a recurring
+                # pull error is exactly the kind of thing that froze the plots
+                # with no clue why.
+                if not self._stall_logged:
+                    log.exception("EEG pull failed")
             self._maybe_record()
+            self._maybe_recover()
             time.sleep(0.05)
 
+    def _maybe_recover(self) -> None:
+        """Watch for a stalled stream and try to recover it. Muse over BLE can
+        stop delivering samples while BrainFlow still reports the session as
+        prepared; without this the GUI just freezes."""
+        if self.synthetic or not self._running or self._stream_lost:
+            return
+        idle = time.time() - self._last_data_time
+        if idle < STALL_TIMEOUT:
+            if self._stall_logged:
+                log.info("Stream recovered after %d reconnect attempt(s)", self._recover_attempts)
+            self._stall_logged = False
+            self._recover_attempts = 0
+            return
+        if not self._stall_logged:
+            log.warning("No new EEG for %.1fs -- stream stalled", idle)
+            self._stall_logged = True
+
+        now = time.time()
+        if now - self._last_recover < RECOVERY_COOLDOWN:
+            return
+        self._last_recover = now
+        if self._recover_attempts >= MAX_RECOVERY_ATTEMPTS:
+            self._stream_lost = True
+            log.error("Giving up after %d reconnect attempts; manual reconnect needed",
+                      self._recover_attempts)
+            return
+        self._recover_attempts += 1
+        log.info("Reconnecting to Muse (attempt %d/%d)...", self._recover_attempts, MAX_RECOVERY_ATTEMPTS)
+        if self._reconnect():
+            # Fresh grace window; if data flows again the next check clears the stall.
+            self._last_data_time = time.time()
+            log.info("Reconnect issued; waiting for data")
+
+    def _reconnect(self) -> bool:
+        """Full BLE reconnect: tear the session all the way down and rebuild it.
+        A plain stop/start can't recover a dropped Muse link -- once the link is
+        gone, start_stream fails with BOARD_WRITE_ERROR -- so we release and
+        prepare the session again, which re-establishes the Bluetooth connection."""
+        if not self._running:
+            return False
+        with self._board_lock:
+            for name in ("stop_stream", "release_session"):
+                try:
+                    if self._board.is_prepared():
+                        getattr(self._board, name)()
+                except Exception as exc:
+                    log.debug("%s during reconnect ignored: %s", name, exc)
+            # Rebuild the session object so no stale native state carries over.
+            try:
+                self._board = BoardShim(self.board_id, self._params)
+                self._board.prepare_session()
+                self._board.start_stream()
+                return True
+            except Exception:
+                log.exception("reconnect prepare/start failed")
+                return False
+
+    # ------------------------------------------------------------------ status
+    def seconds_since_data(self) -> float:
+        """How long since new EEG samples arrived (0 for the synthetic board)."""
+        if self.synthetic or self._last_data_time == 0.0:
+            return 0.0
+        return time.time() - self._last_data_time
+
+    def is_stalled(self) -> bool:
+        return not self.synthetic and self.seconds_since_data() > STALL_TIMEOUT
+
+    def stream_lost(self) -> bool:
+        """True once automatic recovery has been exhausted."""
+        return self._stream_lost
+
     def _pull(self) -> None:
-        data = self._board.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
+        with self._board_lock:
+            data = self._board.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
         if data.shape[1] > 0:
+            self._last_data_time = time.time()  # feeds stall detection
             chunk = data[self.eeg_channels, :]
             with self._lock:
                 n = chunk.shape[1]
@@ -112,15 +304,27 @@ class MuseDevice:
                     self._filled = min(self._filled + n, self._eeg_buf.shape[1])
 
         if self._has_imu:
-            aux = self._board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
+            with self._board_lock:
+                aux = self._board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
             if aux.shape[1] > 0:
-                descr = BoardShim.get_board_descr(self.board_id, BrainFlowPresets.AUXILIARY_PRESET)
-                ac = descr.get("accel_channels", [])
-                gy = descr.get("gyro_channels", [])
+                ac, gy = self._imu_channels()
                 if ac:
                     self._latest_accel = [float(aux[c, -1]) for c in ac]
                 if gy:
                     self._latest_gyro = [float(aux[c, -1]) for c in gy]
+
+    def _imu_channels(self) -> tuple[list[int], list[int]]:
+        """Accel/gyro row indices for the AUX preset, looked up once and cached
+        (the old code queried the board description on every pull)."""
+        cached = getattr(self, "_imu_ch_cache", None)
+        if cached is None:
+            try:
+                descr = BoardShim.get_board_descr(self.board_id, BrainFlowPresets.AUXILIARY_PRESET)
+                cached = (descr.get("accel_channels", []), descr.get("gyro_channels", []))
+            except Exception:
+                cached = ([], [])
+            self._imu_ch_cache = cached
+        return cached
 
     # ------------------------------------------------------------------ snapshots
     def snapshot(self, seconds: float | None = None) -> np.ndarray:
@@ -137,8 +341,17 @@ class MuseDevice:
     def band_powers(self) -> dict[int, np.ndarray]:
         eeg = self.snapshot()
         # compute_band_powers indexes into full-board rows, so build a
-        # channels->local-row array here.
-        return processing.compute_band_powers(eeg, list(range(len(self.eeg_channels))), self.sampling_rate)
+        # channels->local-row array here. Serialise DataFilter use against the
+        # recording thread.
+        with self._compute_lock:
+            return processing.compute_band_powers(eeg, list(range(len(self.eeg_channels))), self.sampling_rate)
+
+    def band_power_db(self) -> np.ndarray:
+        """Absolute band power (averaged across channels) in dB, for the live
+        readout and scrolling chart. NaN array until enough data is buffered."""
+        eeg = self.snapshot()
+        with self._compute_lock:
+            return processing.band_power_db(eeg, list(range(len(self.eeg_channels))), self.sampling_rate)
 
     def signal_quality(self) -> list[str]:
         eeg = self.snapshot(seconds=2.0)
@@ -178,7 +391,8 @@ class MuseDevice:
         if eeg.shape[1] == 0:
             return
         local_channels = list(range(len(self.eeg_channels)))
-        bp = processing.compute_band_powers(eeg, local_channels, self.sampling_rate)
+        with self._compute_lock:
+            bp = processing.compute_band_powers(eeg, local_channels, self.sampling_rate)
         bp = {ch: list(v) for ch, v in bp.items()}
         raw_latest = [float(eeg[i, -1]) for i in local_channels]
         hsi = [processing.signal_quality(eeg[i, -int(self.sampling_rate * 2):]) for i in local_channels]

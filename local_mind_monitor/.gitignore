@@ -1,4 +1,6 @@
 __pycache__/
 *.pyc
 session_*.csv
+*.log
 .venv/
+.DS_Store

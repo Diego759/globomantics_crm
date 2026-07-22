@@ -1,15 +1,21 @@
-"""pyqtgraph widgets: scrolling raw EEG and per-channel band powers."""
+"""pyqtgraph widgets: scrolling raw EEG and a Mind Monitor-style scrolling
+band-power (dB) chart with a Greek symbol riding the end of each band's line."""
 
 from __future__ import annotations
 
 import numpy as np
 import pyqtgraph as pg
-from PySide6 import QtWidgets
+from PySide6 import QtGui, QtWidgets
 
-from ..processing import BANDS
+from ..processing import BAND_SYMBOLS, BANDS
 
-CHANNEL_COLORS = ["#e15759", "#4e79a7", "#59a14f", "#f28e2b", "#b07aa1", "#76b7b2"]
-BAND_COLORS = ["#4e79a7", "#59a14f", "#f28e2b", "#e15759", "#b07aa1"]
+# Dark theme to match the app chrome.
+pg.setConfigOptions(antialias=True, background="#15151a", foreground="#8b8b95")
+
+# Vivid per-band palette (Delta, Theta, Alpha, Beta, Gamma) echoing the
+# familiar Mind Monitor colouring: red / purple / cyan / green / orange.
+BAND_COLORS = ["#ff5b6a", "#c77dff", "#4cc9f0", "#5fd35f", "#ffa94d"]
+CHANNEL_COLORS = ["#ff6b6b", "#4dabf7", "#69db7c", "#ffd43b", "#da77f2", "#3bc9db"]
 
 
 class RawEEGPlot(QtWidgets.QWidget):
@@ -21,16 +27,19 @@ class RawEEGPlot(QtWidgets.QWidget):
         self.offset = 200.0  # vertical spacing between stacked channels (uV)
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.plot = pg.PlotWidget(title="Raw EEG (uV)")
+        self.plot = pg.PlotWidget()
+        self.plot.setTitle("Raw EEG", color="#cfcfd6", size="10pt")
         self.plot.setMenuEnabled(False)
-        self.plot.showGrid(x=False, y=True, alpha=0.2)
+        self.plot.setMouseEnabled(x=False, y=False)
+        self.plot.showGrid(x=False, y=True, alpha=0.12)
         self.plot.getAxis("left").setTicks(
             [[(i * self.offset, name) for i, name in enumerate(channel_names)]]
         )
+        self.plot.getAxis("bottom").setStyle(showValues=False)
         layout.addWidget(self.plot)
         self.curves = []
         for i, name in enumerate(channel_names):
-            pen = pg.mkPen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)], width=1)
+            pen = pg.mkPen(CHANNEL_COLORS[i % len(CHANNEL_COLORS)], width=1.2)
             self.curves.append(self.plot.plot(pen=pen))
 
     def update_data(self, eeg: np.ndarray) -> None:
@@ -43,39 +52,47 @@ class RawEEGPlot(QtWidgets.QWidget):
 
 
 class BandPowerPlot(QtWidgets.QWidget):
-    """Grouped bar chart: five bands per electrode."""
+    """Scrolling line per band (absolute power in dB), with each band's Greek
+    symbol tracking the right-hand end of its line -- like Mind Monitor."""
 
-    def __init__(self, channel_names: list[str]):
+    HISTORY = 240  # points kept (~2 min at the GUI's ~2 Hz band update rate)
+
+    def __init__(self, channel_names: list[str] | None = None):
         super().__init__()
-        self.channel_names = channel_names
         layout = QtWidgets.QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        self.plot = pg.PlotWidget(title="Absolute Band Power")
+        self.plot = pg.PlotWidget()
+        self.plot.setTitle("Absolute Band Power (dB)", color="#cfcfd6", size="10pt")
         self.plot.setMenuEnabled(False)
-        self.plot.showGrid(x=False, y=True, alpha=0.2)
-        n_ch = len(channel_names)
-        group_w = 0.8
-        self.bar_w = group_w / len(BANDS)
-        # x tick labels: one group per channel
-        ticks = [[(i, name) for i, name in enumerate(channel_names)]]
-        self.plot.getAxis("bottom").setTicks(ticks)
-        self.plot.addLegend(offset=(-10, 10))
-        self.bars = []
-        for b, band in enumerate(BANDS):
-            bar = pg.BarGraphItem(
-                x=np.arange(n_ch) + (b - len(BANDS) / 2) * self.bar_w + self.bar_w / 2,
-                height=np.zeros(n_ch),
-                width=self.bar_w,
-                brush=BAND_COLORS[b],
-                name=band,
-            )
-            self.plot.addItem(bar)
-            self.bars.append(bar)
+        self.plot.setMouseEnabled(x=False, y=False)
+        self.plot.showGrid(x=False, y=True, alpha=0.12)
+        self.plot.setLabel("left", "dB")
+        self.plot.getAxis("bottom").setStyle(showValues=False)
+        self.plot.setXRange(0, self.HISTORY - 1, padding=0.02)
+        layout.addWidget(self.plot)
 
-    def update_data(self, band_powers: dict[int, np.ndarray]) -> None:
-        n_ch = len(self.channel_names)
-        for b in range(len(BANDS)):
-            heights = np.array(
-                [float(band_powers.get(ch, np.zeros(len(BANDS)))[b]) for ch in range(n_ch)]
-            )
-            self.bars[b].setOpts(height=heights)
+        self.n = len(BANDS)
+        self.history = np.full((self.n, self.HISTORY), np.nan)
+        self._x = np.arange(self.HISTORY)
+        symbol_font = QtGui.QFont("Segoe UI", 13)
+        symbol_font.setBold(True)
+        self.curves = []
+        self.markers = []
+        for b in range(self.n):
+            pen = pg.mkPen(BAND_COLORS[b], width=2)
+            # connect="finite" leaves gaps for NaN (before data has filled in).
+            self.curves.append(self.plot.plot(pen=pen, connect="finite"))
+            marker = pg.TextItem(BAND_SYMBOLS[b], color=BAND_COLORS[b], anchor=(0, 0.5))
+            marker.setFont(symbol_font)
+            self.plot.addItem(marker)
+            self.markers.append(marker)
+
+    def update_data(self, db: np.ndarray) -> None:
+        db = np.asarray(db, dtype=float)
+        self.history = np.roll(self.history, -1, axis=1)
+        self.history[:, -1] = db[: self.n]
+        for b in range(self.n):
+            self.curves[b].setData(self._x, self.history[b])
+            last = self.history[b, -1]
+            if np.isfinite(last):
+                self.markers[b].setPos(self.HISTORY - 1, float(last))

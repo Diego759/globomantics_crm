@@ -1,0 +1,5 @@
+# Shell launchers must stay LF, or macOS bash won't run them after a Windows commit.
+*.command text eol=lf
+*.sh      text eol=lf
+# Windows batch launchers stay CRLF.
+*.bat     text eol=crlf
