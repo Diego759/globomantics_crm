@@ -84,6 +84,56 @@ def band_power_db(eeg: np.ndarray, channels: list[int], sampling_rate: int) -> n
         return 10.0 * np.log10(np.maximum(totals, 1e-12))
 
 
+def heart_rate(ppg: np.ndarray, sampling_rate: int) -> float | None:
+    """Estimate heart rate (BPM) from PPG / optical channels.
+
+    The Muse S Athena exposes 16 raw optical channels (no fixed IR/red mapping),
+    so instead of BrainFlow's two-channel ``get_heart_rate`` we find the channel
+    with the clearest pulse and read its dominant frequency in the physiological
+    band. Returns ``None`` when there's no prominent pulse or too little data
+    yet, so the UI can show ``--`` rather than a made-up number.
+    """
+    if ppg.ndim == 1:
+        ppg = ppg[None, :]
+    n = ppg.shape[1]
+    if n < sampling_rate * 4:  # need a few seconds for a stable estimate
+        return None
+
+    lo, hi = 0.7, 3.3  # 42-198 BPM
+    freqs = np.fft.rfftfreq(n, d=1.0 / sampling_rate)
+    band = (freqs >= lo) & (freqs <= hi)
+    if not band.any():
+        return None
+    band_freqs = freqs[band]
+    df = freqs[1] - freqs[0] if freqs.size > 1 else sampling_rate / n
+    window = np.hanning(n)
+
+    best_bpm: float | None = None
+    best_score = 0.0
+    for ch in range(ppg.shape[0]):
+        x = ppg[ch].astype(float)
+        if not np.all(np.isfinite(x)) or np.std(x) < 1e-9:
+            continue
+        spec = np.abs(np.fft.rfft((x - x.mean()) * window))[band]
+        peak = int(np.argmax(spec))
+        # Peak prominence vs the rest of the band -- rejects flat/noisy channels.
+        score = spec[peak] / (np.mean(spec) + 1e-12)
+        if score <= best_score:
+            continue
+        # Parabolic interpolation around the peak for sub-bin accuracy.
+        freq = band_freqs[peak]
+        if 0 < peak < spec.size - 1:
+            a, b, c = spec[peak - 1], spec[peak], spec[peak + 1]
+            denom = a - 2 * b + c
+            if denom != 0:
+                freq += 0.5 * (a - c) / denom * df
+        best_score, best_bpm = score, float(freq * 60.0)
+
+    if best_bpm is None or best_score < 3.0:
+        return None
+    return best_bpm
+
+
 def signal_quality(channel_samples: np.ndarray) -> str:
     """Classify one electrode's recent samples as good/ok/bad (HSI analog).
 

@@ -37,6 +37,7 @@ QPushButton#recordBtn[recording="true"]:enabled { background: #8a2f33; border: 1
 QPushButton#recordBtn[recording="true"]:enabled:hover { background: #9c363b; }
 
 QLabel#sectionLabel { color: #7d7d88; font-size: 11px; font-weight: 700; letter-spacing: 1px; }
+QLabel#vitalLabel { color: #b9b9c4; font-size: 13px; font-weight: 600; }
 
 QStatusBar { background: #0e0e12; color: #9a9aa5; }
 QStatusBar::item { border: none; }
@@ -121,7 +122,20 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addWidget(self.record_btn)
         bar.addWidget(self.marker_btn)
         bar.addStretch(1)
+
+        # Live vitals, right-aligned.
+        self.hr_lbl = QtWidgets.QLabel("♥ -- BPM")
+        self.hr_lbl.setObjectName("vitalLabel")
+        self.battery_lbl = QtWidgets.QLabel("Battery --%")
+        self.battery_lbl.setObjectName("vitalLabel")
+        bar.addWidget(self.hr_lbl)
+        bar.addSpacing(14)
+        bar.addWidget(self.battery_lbl)
         return bar
+
+    def _reset_vitals(self) -> None:
+        self.hr_lbl.setText("♥ -- BPM")
+        self.battery_lbl.setText("Battery --%")
 
     def _build_quality_row(self) -> QtWidgets.QHBoxLayout:
         row = QtWidgets.QHBoxLayout()
@@ -201,6 +215,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.device = None
         self._teardown_view()
         self.readout.reset()
+        self._reset_vitals()
         self.record_btn.setText("Start Recording")
         self._set_recording_style(False)
         self._set_connected_state(False)
@@ -263,8 +278,15 @@ class MainWindow(QtWidgets.QMainWindow):
             if self.band_plot:
                 self.band_plot.update_data(db)
             self._update_quality()
+            self._update_vitals()
 
         self._update_stream_status()
+
+    def _update_vitals(self) -> None:
+        bat = self.device.battery_level()
+        hr = self.device.heart_rate()
+        self.battery_lbl.setText("Battery --%" if bat is None else f"Battery {bat:.0f}%")
+        self.hr_lbl.setText("♥ -- BPM" if hr is None else f"♥ {hr:.0f} BPM")
 
     def _update_quality(self) -> None:
         for name, quality in zip(self.device.channel_names, self.device.signal_quality()):

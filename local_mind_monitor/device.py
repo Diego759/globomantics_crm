@@ -52,6 +52,9 @@ ATHENA_PRESET = "p1035"
 # connecting on this setup, so we default to the conservative mode.
 ATHENA_LOW_LATENCY_DEFAULT = False
 
+# Seconds of PPG/optical data to keep for the heart-rate estimate.
+HR_BUFFER_SECONDS = 12
+
 
 class DeviceNotFoundError(RuntimeError):
     """Raised when the headband could not be reached after retries."""
@@ -99,6 +102,30 @@ class MuseDevice:
         self._latest_accel = [0.0, 0.0, 0.0]
         self._latest_gyro = [0.0, 0.0, 0.0]
 
+        # Battery and PPG/optical (heart rate) live in a different preset than
+        # EEG -- ancillary on the Athena, default on the synthetic board -- so
+        # find where they are and which extra presets we must read each pull.
+        self._battery = self._locate_channel("battery_channel")             # (preset, row) | None
+        self._ppg = self._locate_channels(("optical_channels", "ppg_channels"))  # (preset, rows, sr) | None
+        self._latest_battery: float | None = None
+        if self._ppg is not None:
+            _, ppg_rows, ppg_sr = self._ppg
+            self._ppg_sr = ppg_sr
+            self._ppg_buf = np.zeros((len(ppg_rows), max(1, int(ppg_sr * HR_BUFFER_SECONDS))))
+        else:
+            self._ppg_sr = 0
+            self._ppg_buf = None
+        self._ppg_filled = 0
+
+        extra: set = set()
+        if self._has_imu:
+            extra.add(BrainFlowPresets.AUXILIARY_PRESET)
+        for loc in (self._battery, self._ppg):
+            if loc is not None:
+                extra.add(loc[0])
+        extra.discard(BrainFlowPresets.DEFAULT_PRESET)  # DEFAULT is always read
+        self._extra_presets = sorted(extra, key=lambda p: p.value)
+
         self._running = False
         self._thread: threading.Thread | None = None
         self._recorder: Recorder | None = None
@@ -125,6 +152,38 @@ class MuseDevice:
             return True
         except Exception:
             return False
+
+    _PRESETS = (
+        BrainFlowPresets.DEFAULT_PRESET,
+        BrainFlowPresets.AUXILIARY_PRESET,
+        BrainFlowPresets.ANCILLARY_PRESET,
+    )
+
+    def _locate_channel(self, key: str):
+        """Find (preset, row) for a scalar channel like ``battery_channel``."""
+        for preset in self._PRESETS:
+            try:
+                d = BoardShim.get_board_descr(self.board_id, preset)
+            except Exception:
+                continue
+            row = d.get(key)
+            if isinstance(row, int):
+                return (preset, row)
+        return None
+
+    def _locate_channels(self, keys: tuple[str, ...]):
+        """Find (preset, rows, sampling_rate) for the first of ``keys`` present
+        as a non-empty channel list (e.g. optical_channels / ppg_channels)."""
+        for preset in self._PRESETS:
+            try:
+                d = BoardShim.get_board_descr(self.board_id, preset)
+            except Exception:
+                continue
+            for key in keys:
+                rows = d.get(key)
+                if isinstance(rows, list) and rows:
+                    return (preset, list(rows), int(d.get("sampling_rate", self.sampling_rate)))
+        return None
 
     # ------------------------------------------------------------------ lifecycle
     def start(self) -> None:
@@ -288,30 +347,64 @@ class MuseDevice:
         return self._stream_lost
 
     def _pull(self) -> None:
+        # DEFAULT preset carries EEG (and, on the synthetic board, battery/PPG).
         with self._board_lock:
             data = self._board.get_board_data(preset=BrainFlowPresets.DEFAULT_PRESET)
         if data.shape[1] > 0:
             self._last_data_time = time.time()  # feeds stall detection
-            chunk = data[self.eeg_channels, :]
-            with self._lock:
-                n = chunk.shape[1]
-                if n >= self._eeg_buf.shape[1]:
-                    self._eeg_buf = chunk[:, -self._eeg_buf.shape[1] :].copy()
-                    self._filled = self._eeg_buf.shape[1]
-                else:
-                    self._eeg_buf = np.roll(self._eeg_buf, -n, axis=1)
-                    self._eeg_buf[:, -n:] = chunk
-                    self._filled = min(self._filled + n, self._eeg_buf.shape[1])
+            self._ingest_eeg(data)
+            self._ingest_battery_ppg(data, BrainFlowPresets.DEFAULT_PRESET)
 
-        if self._has_imu:
+        # Extra presets: IMU (auxiliary) and, on the Athena, battery + optical
+        # PPG (ancillary). Each preset's buffer is drained once per pull.
+        for preset in self._extra_presets:
             with self._board_lock:
-                aux = self._board.get_board_data(preset=BrainFlowPresets.AUXILIARY_PRESET)
-            if aux.shape[1] > 0:
-                ac, gy = self._imu_channels()
-                if ac:
-                    self._latest_accel = [float(aux[c, -1]) for c in ac]
-                if gy:
-                    self._latest_gyro = [float(aux[c, -1]) for c in gy]
+                extra = self._board.get_board_data(preset=preset)
+            if extra.shape[1] == 0:
+                continue
+            if preset == BrainFlowPresets.AUXILIARY_PRESET and self._has_imu:
+                self._ingest_imu(extra)
+            self._ingest_battery_ppg(extra, preset)
+
+    def _ingest_eeg(self, data: np.ndarray) -> None:
+        chunk = data[self.eeg_channels, :]
+        with self._lock:
+            n = chunk.shape[1]
+            if n >= self._eeg_buf.shape[1]:
+                self._eeg_buf = chunk[:, -self._eeg_buf.shape[1] :].copy()
+                self._filled = self._eeg_buf.shape[1]
+            else:
+                self._eeg_buf = np.roll(self._eeg_buf, -n, axis=1)
+                self._eeg_buf[:, -n:] = chunk
+                self._filled = min(self._filled + n, self._eeg_buf.shape[1])
+
+    def _ingest_imu(self, aux: np.ndarray) -> None:
+        ac, gy = self._imu_channels()
+        if ac and aux.shape[0] > max(ac):
+            self._latest_accel = [float(aux[c, -1]) for c in ac]
+        if gy and aux.shape[0] > max(gy):
+            self._latest_gyro = [float(aux[c, -1]) for c in gy]
+
+    def _ingest_battery_ppg(self, data: np.ndarray, preset) -> None:
+        if self._battery is not None and self._battery[0] == preset:
+            row = self._battery[1]
+            if data.shape[0] > row:
+                self._latest_battery = float(data[row, -1])
+        if self._ppg is not None and self._ppg[0] == preset and self._ppg_buf is not None:
+            rows = [r for r in self._ppg[1] if r < data.shape[0]]
+            if len(rows) == self._ppg_buf.shape[0]:
+                self._append_ppg(data[rows, :])
+
+    def _append_ppg(self, chunk: np.ndarray) -> None:
+        with self._lock:
+            n = chunk.shape[1]
+            if n >= self._ppg_buf.shape[1]:
+                self._ppg_buf = chunk[:, -self._ppg_buf.shape[1] :].copy()
+                self._ppg_filled = self._ppg_buf.shape[1]
+            else:
+                self._ppg_buf = np.roll(self._ppg_buf, -n, axis=1)
+                self._ppg_buf[:, -n:] = chunk
+                self._ppg_filled = min(self._ppg_filled + n, self._ppg_buf.shape[1])
 
     def _imu_channels(self) -> tuple[list[int], list[int]]:
         """Accel/gyro row indices for the AUX preset, looked up once and cached
@@ -362,6 +455,23 @@ class MuseDevice:
     def headband_on(self) -> bool:
         return any(q != "bad" for q in self.signal_quality())
 
+    def battery_level(self) -> float | None:
+        """Battery charge as a percentage (0-100), or None if unavailable."""
+        if self._battery is None or self._latest_battery is None:
+            return None
+        return max(0.0, min(100.0, float(self._latest_battery)))
+
+    def heart_rate(self) -> float | None:
+        """Estimated heart rate in BPM from PPG/optical data, or None if there's
+        no clear pulse yet (e.g. headband not seated, or synthetic board)."""
+        if self._ppg_buf is None:
+            return None
+        with self._lock:
+            if self._ppg_filled == 0:
+                return None
+            buf = self._ppg_buf[:, -self._ppg_filled :].copy()
+        return processing.heart_rate(buf, self._ppg_sr)
+
     # ------------------------------------------------------------------ recording
     def start_recording(self, path: str) -> None:
         self._recorder = Recorder(path, self.channel_names)
@@ -404,4 +514,6 @@ class MuseDevice:
             gyro=list(self._latest_gyro),
             headband_on=any(q != "bad" for q in hsi),
             hsi=hsi,
+            battery=self.battery_level(),
+            heart_rate=self.heart_rate(),
         )
