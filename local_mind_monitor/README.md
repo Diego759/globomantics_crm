@@ -9,7 +9,7 @@ machine — no accounts, no cloud. Runs on **Windows and macOS**.
 ## Get the code
 
 ```bash
-git clone https://github.com/Diego759/EEG_visualizer_for_muse.git
+git clone https://github.com/Diego759/EGG_visualizer_for_muse.git
 ```
 
 The app lives in the **`local_mind_monitor/`** subfolder of the repo — that's
