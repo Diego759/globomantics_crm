@@ -37,8 +37,15 @@ CONNECT_RETRY_DELAY = 2.0  # seconds between attempts
 # stops delivering samples, so the plots freeze silently. Detect that and try
 # a full reconnect, then give up and tell the user to reconnect by hand.
 STALL_TIMEOUT = 3.0        # seconds with no new EEG before we call it stalled
-RECOVERY_COOLDOWN = 5.0    # seconds between automatic reconnect attempts
-MAX_RECOVERY_ATTEMPTS = 3  # after this many failed reconnects, stop and surface it
+RECOVERY_COOLDOWN = 5.0    # seconds before the first automatic reconnect attempt
+MAX_RECOVERY_ATTEMPTS = 3  # after this many failures we say "lost" in the UI...
+# ...but we KEEP RETRYING for the rest of the session.  Giving up used to be
+# permanent, which quietly cost a whole recording: a link drop 12 minutes into a
+# 40-minute tape got three attempts inside ~20s and then nothing at all for the
+# remaining 28 minutes.  A meditation session is exactly when nobody is watching
+# the screen, so the app has to keep trying on its own.  Back off between tries
+# so we don't hammer the BLE stack (a full reconnect itself takes ~12-16s).
+RECOVERY_BACKOFF_MAX = 60.0   # seconds; delay doubles 5 -> 10 -> 20 -> 40 -> 60
 
 # Muse S Athena preset. BrainFlow defaults to p1041 ("5 EEG values"), but that
 # preset only delivered an initial burst then stopped streaming on this setup.
@@ -132,6 +139,7 @@ class MuseDevice:
         self._last_record = 0.0
         self._record_paused = False    # recording paused because the stream stalled
         self._stale_skipped = 0        # rows not written during the current stall
+        self._recorded_data_time = 0.0  # _last_data_time as of the last row written
 
         # Stall detection / recovery state.
         self._last_data_time = 0.0     # monotonic time new EEG last arrived
@@ -281,7 +289,9 @@ class MuseDevice:
         """Watch for a stalled stream and try to recover it. Muse over BLE can
         stop delivering samples while BrainFlow still reports the session as
         prepared; without this the GUI just freezes."""
-        if self.synthetic or not self._running or self._stream_lost:
+        # NB: deliberately not bailing out on self._stream_lost -- that flag now
+        # means "the user should know the signal is gone", not "stop trying".
+        if self.synthetic or not self._running:
             return
         idle = time.time() - self._last_data_time
         if idle < STALL_TIMEOUT:
@@ -289,22 +299,27 @@ class MuseDevice:
                 log.info("Stream recovered after %d reconnect attempt(s)", self._recover_attempts)
             self._stall_logged = False
             self._recover_attempts = 0
+            self._stream_lost = False        # back in business
             return
         if not self._stall_logged:
             log.warning("No new EEG for %.1fs -- stream stalled", idle)
             self._stall_logged = True
 
+        # Exponential backoff: 5s, 10s, 20s, 40s, then every 60s indefinitely.
+        delay = min(RECOVERY_COOLDOWN * (2 ** max(0, self._recover_attempts - 1)),
+                    RECOVERY_BACKOFF_MAX)
         now = time.time()
-        if now - self._last_recover < RECOVERY_COOLDOWN:
+        if now - self._last_recover < delay:
             return
         self._last_recover = now
-        if self._recover_attempts >= MAX_RECOVERY_ATTEMPTS:
-            self._stream_lost = True
-            log.error("Giving up after %d reconnect attempts; manual reconnect needed",
-                      self._recover_attempts)
-            return
         self._recover_attempts += 1
-        log.info("Reconnecting to Muse (attempt %d/%d)...", self._recover_attempts, MAX_RECOVERY_ATTEMPTS)
+        if self._recover_attempts > MAX_RECOVERY_ATTEMPTS and not self._stream_lost:
+            self._stream_lost = True         # surface it in the UI, keep trying
+            log.error("Signal still lost after %d attempts; continuing to retry every %.0fs",
+                      MAX_RECOVERY_ATTEMPTS, RECOVERY_BACKOFF_MAX)
+        log.info("Reconnecting to Muse (attempt %d, next retry in %.0fs if this fails)...",
+                 self._recover_attempts,
+                 min(RECOVERY_COOLDOWN * (2 ** self._recover_attempts), RECOVERY_BACKOFF_MAX))
         if self._reconnect():
             # Fresh grace window; if data flows again the next check clears the stall.
             self._last_data_time = time.time()
@@ -345,8 +360,13 @@ class MuseDevice:
         return not self.synthetic and self.seconds_since_data() > STALL_TIMEOUT
 
     def stream_lost(self) -> bool:
-        """True once automatic recovery has been exhausted."""
+        """True when the signal has been gone long enough that the user should
+        know.  Automatic reconnection keeps running regardless."""
         return self._stream_lost
+
+    def recovery_attempts(self) -> int:
+        """Reconnect attempts made since the stream last delivered data."""
+        return self._recover_attempts
 
     def _pull(self) -> None:
         # DEFAULT preset carries EEG (and, on the synthetic board, battery/PPG).
@@ -506,7 +526,10 @@ class MuseDevice:
         # rows look like real data (timestamps advance, HSI still says "good")
         # but are a frozen value — they draw as a flat line and skew every
         # metric.  Better to leave a gap that is honestly missing.
-        if self.is_stalled():
+        # Exact test: has the acquisition thread received anything since the row
+        # we last wrote?  Using is_stalled() alone would still let through the
+        # STALL_TIMEOUT-sized window of duplicates right after a drop.
+        if self._last_data_time <= self._recorded_data_time or self.is_stalled():
             if not self._record_paused:
                 log.warning("recording paused: no EEG for %.1fs - not writing stale rows",
                             self.seconds_since_data())
@@ -517,6 +540,7 @@ class MuseDevice:
             log.info("recording resumed after a stall (%d row(s) skipped)", self._stale_skipped)
             self._record_paused = False
             self._stale_skipped = 0
+        self._recorded_data_time = self._last_data_time
 
         eeg = self.snapshot()
         if eeg.shape[1] == 0:

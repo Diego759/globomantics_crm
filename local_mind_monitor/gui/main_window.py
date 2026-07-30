@@ -304,7 +304,10 @@ class MainWindow(QtWidgets.QMainWindow):
         if dev is None:
             return
         if dev.stream_lost():
-            msg = "Signal lost — click Disconnect, then Connect to reconnect."
+            # Recovery never stops now, so don't tell the user to do it by hand.
+            msg = (f"⚠ Signal lost ({dev.seconds_since_data():.0f}s) — still reconnecting "
+                   f"automatically (attempt {dev.recovery_attempts()}). "
+                   "Check the headband is on and charged.")
             if self.status.currentMessage() != msg:
                 self.status.showMessage(msg)
             self._was_stalled = True
