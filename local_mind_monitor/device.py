@@ -130,6 +130,8 @@ class MuseDevice:
         self._thread: threading.Thread | None = None
         self._recorder: Recorder | None = None
         self._last_record = 0.0
+        self._record_paused = False    # recording paused because the stream stalled
+        self._stale_skipped = 0        # rows not written during the current stall
 
         # Stall detection / recovery state.
         self._last_data_time = 0.0     # monotonic time new EEG last arrived
@@ -497,6 +499,25 @@ class MuseDevice:
         if now - self._last_record < RECORD_INTERVAL:
             return
         self._last_record = now
+
+        # Never record a dead stream.  snapshot() reads a ring buffer that still
+        # holds the last samples received, so if BLE has dropped we would write
+        # byte-identical rows once a second for the rest of the session.  Those
+        # rows look like real data (timestamps advance, HSI still says "good")
+        # but are a frozen value — they draw as a flat line and skew every
+        # metric.  Better to leave a gap that is honestly missing.
+        if self.is_stalled():
+            if not self._record_paused:
+                log.warning("recording paused: no EEG for %.1fs - not writing stale rows",
+                            self.seconds_since_data())
+                self._record_paused = True
+            self._stale_skipped += 1
+            return
+        if self._record_paused:
+            log.info("recording resumed after a stall (%d row(s) skipped)", self._stale_skipped)
+            self._record_paused = False
+            self._stale_skipped = 0
+
         eeg = self.snapshot()
         if eeg.shape[1] == 0:
             return
