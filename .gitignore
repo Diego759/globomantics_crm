@@ -1,0 +1,10 @@
+# Recorded EEG sessions (the app writes these into the working directory).
+session_*.csv
+# App log
+*.log
+# Python / env
+__pycache__/
+*.pyc
+.venv/
+# macOS
+.DS_Store

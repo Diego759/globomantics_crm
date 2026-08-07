@@ -91,11 +91,23 @@ Options:
 python -m local_mind_monitor.app --mac XX:XX:XX:XX:XX:XX   # target a specific device
 python -m local_mind_monitor.app --preset p1035            # BrainFlow Athena preset (default p1035)
 python -m local_mind_monitor.app --low-latency             # BrainFlow's L1 low-latency mode
+python -m local_mind_monitor.app --battery-scale 1.0       # show BrainFlow's raw battery number
 ```
 
 Click **Connect**, then **Start Recording** to save a `session_*.csv` in the
 current directory. **Marker** annotates the next row. Sanity check on real
 hardware: alpha power (8–13 Hz) rises when you close your eyes.
+
+### About the battery percentage
+
+BrainFlow reports the Athena's battery as `raw / 512`
+(`MUSE_ATHENA_BATTERY_PERCENT_SCALE_FACTOR` in its `muse_athena.cpp`, a constant
+carried over from the older Muse telemetry format). The Athena actually encodes
+percent as `raw / 256` (Q8.8 fixed point), so BrainFlow's number comes out
+exactly **half** — a fully charged headband reads 50%. This app doubles it to get
+the true percentage. Each new reading is written to `local_mind_monitor.log` as
+`Battery: raw=... x2.00 -> ...%`, and `--battery-scale 1.0` shows BrainFlow's
+uncorrected value if you want to compare.
 
 ### About the Athena preset
 

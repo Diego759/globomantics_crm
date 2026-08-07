@@ -62,6 +62,15 @@ ATHENA_LOW_LATENCY_DEFAULT = False
 # Seconds of PPG/optical data to keep for the heart-rate estimate.
 HR_BUFFER_SECONDS = 12
 
+# BrainFlow reports the Athena battery as raw_uint16 * (1/512) -- see
+# MUSE_ATHENA_BATTERY_PERCENT_SCALE_FACTOR in its muse_athena.cpp, a constant
+# inherited from the older Muse telemetry format. On a fully charged Athena that
+# reads 50%, i.e. raw 25600 -- which is exactly 100% in Q8.8 fixed point
+# (100 * 256), so the Athena's true scale is 1/256. Doubling BrainFlow's number
+# gives the real percentage. Override with --battery-scale if your firmware
+# differs.
+ATHENA_BATTERY_SCALE = 2.0
+
 
 class DeviceNotFoundError(RuntimeError):
     """Raised when the headband could not be reached after retries."""
@@ -74,11 +83,18 @@ class MuseDevice:
         mac_address: str | None = None,
         low_latency: bool = ATHENA_LOW_LATENCY_DEFAULT,
         preset: str = ATHENA_PRESET,
+        battery_scale: float | None = None,
     ):
         BoardShim.disable_board_logger()
         self.synthetic = synthetic
         self._low_latency = low_latency
         self._preset = preset
+        # The synthetic board already reports a true 0-100 percentage; only the
+        # Athena needs BrainFlow's halved value corrected.
+        if battery_scale is not None:
+            self._battery_scale = float(battery_scale)
+        else:
+            self._battery_scale = 1.0 if synthetic else ATHENA_BATTERY_SCALE
         params = BrainFlowInputParams()
         if synthetic:
             self.board_id = BoardIds.SYNTHETIC_BOARD.value
@@ -411,11 +427,30 @@ class MuseDevice:
         if self._battery is not None and self._battery[0] == preset:
             row = self._battery[1]
             if data.shape[0] > row:
-                self._latest_battery = float(data[row, -1])
+                self._update_battery(data[row, :])
         if self._ppg is not None and self._ppg[0] == preset and self._ppg_buf is not None:
             rows = [r for r in self._ppg[1] if r < data.shape[0]]
             if len(rows) == self._ppg_buf.shape[0]:
                 self._append_ppg(data[rows, :])
+
+    def _update_battery(self, samples: np.ndarray) -> None:
+        """Hold the most recent *known* battery reading.
+
+        The Athena sends battery in asynchronous status packets, so the channel
+        reads 0 until the first one lands and then repeats the last value. Taking
+        the newest non-zero sample means we show "--" while waiting instead of a
+        misleading 0%. The raw value is logged whenever the displayed percentage
+        changes, so the scale factor can be verified against the headband.
+        """
+        valid = samples[np.isfinite(samples) & (samples > 0)]
+        if valid.size == 0:
+            return
+        raw = float(valid[-1])
+        before = self.battery_level()
+        self._latest_battery = raw
+        after = self.battery_level()
+        if after is not None and (before is None or round(before) != round(after)):
+            log.info("Battery: raw=%.4f x%.2f -> %.0f%%", raw, self._battery_scale, after)
 
     def _append_ppg(self, chunk: np.ndarray) -> None:
         with self._lock:
@@ -478,10 +513,10 @@ class MuseDevice:
         return any(q != "bad" for q in self.signal_quality())
 
     def battery_level(self) -> float | None:
-        """Battery charge as a percentage (0-100), or None if unavailable."""
+        """Battery charge as a percentage (0-100), or None if not known yet."""
         if self._battery is None or self._latest_battery is None:
             return None
-        return max(0.0, min(100.0, float(self._latest_battery)))
+        return max(0.0, min(100.0, float(self._latest_battery) * self._battery_scale))
 
     def heart_rate(self) -> float | None:
         """Estimated heart rate in BPM from PPG/optical data, or None if there's

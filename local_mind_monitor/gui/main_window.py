@@ -51,12 +51,14 @@ class MainWindow(QtWidgets.QMainWindow):
         mac_address: str | None = None,
         low_latency: bool = False,
         preset: str = "p1035",
+        battery_scale: float | None = None,
     ):
         super().__init__()
         self._synthetic = synthetic
         self._mac = mac_address
         self._low_latency = low_latency
         self._preset = preset
+        self._battery_scale = battery_scale
         self.device: MuseDevice | None = None
 
         self.setWindowTitle("EEG Visualizer for Muse" + (" (synthetic)" if synthetic else ""))
@@ -183,6 +185,7 @@ class MainWindow(QtWidgets.QMainWindow):
                 mac_address=self._mac,
                 low_latency=self._low_latency,
                 preset=self._preset,
+                battery_scale=self._battery_scale,
             )
             self.device.start()
         except Exception as exc:

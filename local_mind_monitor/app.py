@@ -62,6 +62,14 @@ def main() -> int:
         help="Muse S Athena BrainFlow preset (e.g. p1035, p1034, p1041). Default p1035 "
         "(4 EEG channels); p1041 only delivered an initial burst then stalled here.",
     )
+    parser.add_argument(
+        "--battery-scale",
+        type=float,
+        default=None,
+        help="Correction factor for the battery percentage (default 2.0 on the Athena: "
+        "BrainFlow scales its raw reading by 1/512 when the device uses 1/256, so a full "
+        "charge reads 50%%). Use 1.0 to see BrainFlow's raw number.",
+    )
     args = parser.parse_args()
 
     log_path = _setup_logging()
@@ -88,6 +96,7 @@ def main() -> int:
         mac_address=args.mac,
         low_latency=args.low_latency,
         preset=args.preset,
+        battery_scale=args.battery_scale,
     )
 
     def _surface() -> None:
