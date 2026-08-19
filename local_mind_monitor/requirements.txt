@@ -3,3 +3,6 @@ numpy>=1.24
 PySide6>=6.6
 pyqtgraph>=0.13
 bleak>=0.21  # used only by the Bluetooth Check diagnostic
+# Chamber audio output. PortAudio ships inside the wheel, and journeys still
+# export to WAV if this one fails to install.
+sounddevice>=0.4

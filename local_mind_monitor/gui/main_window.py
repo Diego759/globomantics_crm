@@ -1,5 +1,6 @@
 """Main window: modern dark chrome, connect/record controls, signal-quality
-row, live band-power dB readout, and the scrolling plots."""
+row, and two tabs -- Monitor (live band-power readout and scrolling plots) and
+Chamber (entrainment journeys steered by the same live band powers)."""
 
 from __future__ import annotations
 
@@ -11,6 +12,7 @@ from PySide6 import QtCore, QtWidgets
 
 from ..device import MuseDevice
 from .band_readout import BandReadout
+from .chamber_panel import ChamberPanel
 from .plots import BandPowerPlot, RawEEGPlot
 
 log = logging.getLogger("local_mind_monitor.gui")
@@ -41,6 +43,29 @@ QLabel#vitalLabel { color: #b9b9c4; font-size: 13px; font-weight: 600; }
 
 QStatusBar { background: #0e0e12; color: #9a9aa5; }
 QStatusBar::item { border: none; }
+
+QTabWidget::pane { border: 1px solid #26262e; border-radius: 10px; top: -1px; }
+QTabBar::tab { background: transparent; color: #7d7d88; padding: 7px 18px;
+    border: 1px solid transparent; border-top-left-radius: 8px; border-top-right-radius: 8px;
+    font-weight: 600; }
+QTabBar::tab:selected { color: #e6e6ea; background: #1c1c23; border-color: #26262e; }
+QTabBar::tab:hover:!selected { color: #b9b9c4; }
+
+QComboBox { background: #1c1c23; color: #e6e6ea; border: 1px solid #35353f;
+    border-radius: 8px; padding: 6px 10px; }
+QComboBox:hover { border-color: #4a4a57; }
+QComboBox QAbstractItemView { background: #1c1c23; color: #e6e6ea;
+    selection-background-color: #2c9a61; border: 1px solid #35353f; }
+
+QCheckBox { color: #c8c8d2; spacing: 7px; }
+QCheckBox::indicator { width: 15px; height: 15px; border-radius: 4px;
+    border: 1px solid #45454f; background: #1c1c23; }
+QCheckBox::indicator:checked { background: #2c9a61; border-color: #2c9a61; }
+
+QSlider::groove:horizontal { height: 4px; background: #26262e; border-radius: 2px; }
+QSlider::handle:horizontal { width: 13px; margin: -5px 0; border-radius: 6px;
+    background: #cfcfd6; }
+QSlider::sub-page:horizontal { background: #4cc9f0; border-radius: 2px; }
 """
 
 
@@ -75,16 +100,13 @@ class MainWindow(QtWidgets.QMainWindow):
         self.quality_row = self._build_quality_row()
         root.addLayout(self.quality_row)
 
-        # Always-visible band-power readout (shows "–– dB" until connected).
-        self.readout = BandReadout()
-        root.addWidget(self.readout)
-
-        # Plots are created on connect (need channel names from the device).
-        self.plot_area = QtWidgets.QVBoxLayout()
-        self.plot_area.setSpacing(10)
-        root.addLayout(self.plot_area, stretch=1)
-        self.raw_plot: RawEEGPlot | None = None
-        self.band_plot: BandPowerPlot | None = None
+        # Two views over the same device: watch it, or listen to something that
+        # is steered by it. The connect/record controls above stay shared.
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.addTab(self._build_monitor_page(), "Monitor")
+        self.chamber = ChamberPanel(device_getter=lambda: self.device)
+        self.tabs.addTab(self.chamber, "Chamber")
+        root.addWidget(self.tabs, stretch=1)
 
         self.status = self.statusBar()
         self.status.showMessage("Disconnected")
@@ -95,6 +117,24 @@ class MainWindow(QtWidgets.QMainWindow):
         self._was_stalled = False
 
     # ---------------------------------------------------------------- ui builders
+    def _build_monitor_page(self) -> QtWidgets.QWidget:
+        page = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(page)
+        layout.setContentsMargins(0, 10, 0, 0)
+        layout.setSpacing(10)
+
+        # Always-visible band-power readout (shows "–– dB" until connected).
+        self.readout = BandReadout()
+        layout.addWidget(self.readout)
+
+        # Plots are created on connect (need channel names from the device).
+        self.plot_area = QtWidgets.QVBoxLayout()
+        self.plot_area.setSpacing(10)
+        layout.addLayout(self.plot_area, stretch=1)
+        self.raw_plot: RawEEGPlot | None = None
+        self.band_plot: BandPowerPlot | None = None
+        return page
+
     def _build_toolbar(self) -> QtWidgets.QHBoxLayout:
         bar = QtWidgets.QHBoxLayout()
         bar.setSpacing(8)
@@ -329,6 +369,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self._was_stalled = False
 
     def closeEvent(self, event) -> None:
+        self.chamber.shutdown()
         if self.device:
             self.device.stop()
         super().closeEvent(event)

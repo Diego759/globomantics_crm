@@ -1,5 +1,8 @@
 # Recorded EEG sessions (the app writes these into the working directory).
 session_*.csv
+# Chamber session logs and exported journeys
+chamber_*.csv
+*.wav
 # App log
 *.log
 # Python / env

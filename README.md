@@ -20,6 +20,9 @@ The app lives in **[`local_mind_monitor/`](local_mind_monitor/)** — see its
 - **Robust Bluetooth** — connects to the Athena over native BLE via
   [BrainFlow](https://brainflow.org), detects and auto-recovers a stalled
   stream, and logs everything locally.
+- **The Chamber** — binaural / monaural / isochronic entrainment journeys that
+  are steered by your own live band powers, and tell you afterwards whether
+  anything actually moved.
 
 ## Quick start
 
@@ -46,6 +49,36 @@ installs dependencies (~1 minute); every launch after that opens instantly.
 
 On real hardware, alpha power (8–13 Hz) rises when you close your eyes — a quick
 way to confirm the signal is real.
+
+## The Chamber
+
+Binaural-beat apps are open loop: they play 10 Hz at you and assume something
+happened. You are wearing an EEG headband, so the Chamber measures instead.
+
+It records a quiet 60-second baseline, plays a journey through its frequency
+arc, and then hunts — holding each candidate beat frequency long enough to score
+the target band against *your* rest, and stepping toward whatever actually
+raised it. At the end it prints your personal response curve, and every sample
+lands in a `chamber_*.csv` next to your recordings.
+
+Twelve journeys are built in (descents to theta, a 25-minute delta slide, a nap
+with a real wake-up ramp, 40 Hz gamma, Schumann 7.83 Hz, a 45-minute focus
+block…), all of them plain data you can copy and edit — nothing is locked and
+there is nothing to buy. Binaural needs headphones; monaural and isochronic
+modes work on speakers.
+
+No Android build, and none needed: **Export WAV** writes an ordinary stereo file
+— with your own tuning baked in — that plays on any phone, offline, forever.
+
+```bash
+python -m local_mind_monitor.chamber list
+python -m local_mind_monitor.chamber play first-descent --adaptive
+python -m local_mind_monitor.chamber render deep-delta -o deep-delta.wav
+```
+
+Not a medical device. Don't run a journey while driving; several are designed to
+put you to sleep. See the
+[detailed README](local_mind_monitor/README.md#the-chamber) for the full notes.
 
 ---
 
